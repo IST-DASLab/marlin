@@ -15,7 +15,7 @@ pip install -U transformers accelerate auto-gptq optimum
 The following converts the model from GPTQ to Marlin format. Note that this requires:
 - `sym=true`
 - `group_size=128`
--  `desc_activations=false`
+- `desc_activations=false`
 
 ```bash
 python3 convert.py --model-id "TheBloke/Llama-2-7B-Chat-GPTQ" --save-path "./marlin-model" --do-generation
