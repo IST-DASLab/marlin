@@ -1,0 +1,10 @@
+build
+dist
+profile.ncu-rep
+*.egg-info*
+backup
+marlin/__pycache__
+_backup
+gptq/__pycache__
+gptq/*.marlin.g128
+__pycache__
