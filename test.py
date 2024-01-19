@@ -61,7 +61,7 @@ class Test(unittest.TestCase):
         B_ref, B, s = gen_quant4(k, n, groupsize=groupsize)
         C = torch.zeros((m, n), dtype=torch.half, device=DEV)
         C_ref = torch.matmul(A, B_ref)
-        workspace = torch.zeros(256, device=DEV)
+        workspace = torch.zeros(n // 128, device=DEV)
         marlin.mul(A, B, C, s, workspace, thread_k, thread_n, -1)
         torch.cuda.synchronize()
         self.assertLess(torch.mean(torch.abs(C - C_ref)) / torch.mean(torch.abs(C_ref)), 0.001)
@@ -125,7 +125,7 @@ class Test(unittest.TestCase):
         A = torch.randn((m, k), dtype=torch.half, device=DEV)
         B_ref, B, s = gen_quant4(k, n)
         C = torch.zeros((m, n), dtype=torch.half, device=DEV)
-        workspace = torch.zeros(1024, device=DEV)
+        workspace = torch.zeros(n // 128, device=DEV)
         err = False
         try:
             marlin.mul(A, B, C, s, workspace, 128, 128, -1)
