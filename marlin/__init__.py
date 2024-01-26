@@ -20,7 +20,7 @@ import torch.nn as nn
 
 import marlin_cuda
 
-def mul(A, B, C, s, workspace, thread_k=-1, thread_n=-1, sms=-1, max_par=8):
+def mul(A, B, C, s, workspace, thread_k=-1, thread_n=-1, sms=-1, max_par=16):
     """Marlin FP16xINT4 multiply; can be used within `torch.compile`.
     @A: `torch.half` input matrix of shape `(m, k)` in standard row-major layout
     @B: `torch.int` weight matrix of original shape `(k, n)` in Marlin format; see `Layer.pack()`
@@ -91,8 +91,8 @@ class Layer(nn.Module):
         self.groupsize = groupsize
         self.register_buffer('B', torch.empty((self.k // 16, self.n * 16 // 8), dtype=torch.int))
         self.register_buffer('s', torch.empty((self.k // groupsize, self.n), dtype=torch.half))
-        # 128 is currently the minimum `tile_n`, hence it gives the maximum workspace size; 8 is the default `max_par`
-        self.register_buffer('workspace', torch.zeros(self.n // 128 * 8, dtype=torch.int), persistent=False)
+        # 128 is currently the minimum `tile_n`, hence it gives the maximum workspace size; 16 is the default `max_par`
+        self.register_buffer('workspace', torch.zeros(self.n // 128 * 16, dtype=torch.int), persistent=False)
 
     def forward(self, A):
         C = torch.empty(A.shape[:-1] + (self.s.shape[1],), dtype=A.dtype, device=A.device)

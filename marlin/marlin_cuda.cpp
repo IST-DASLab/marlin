@@ -35,7 +35,7 @@ int marlin_cuda(
   int thread_k = -1,
   int thread_n = -1,
   int sms = -1,
-  int max_par = 8
+  int max_par = 16
 );
 
 const int ERR_PROB_SHAPE = 1;

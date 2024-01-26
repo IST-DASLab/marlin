@@ -22,6 +22,7 @@
 #include <cuda.h>
 #include <cuda_fp16.h>
 #include <cuda_runtime.h>
+#include <iostream>
 
 
 constexpr int ceildiv(int a, int b) {
@@ -212,6 +213,7 @@ __global__ void Marlin(
   // for many kinds of shape and GPU configurations, while requiring as few slow global cross-threadblock reductions as 
   // possible.
   
+  // For larger GEMMs we run multiple batchsize 64 versions in parallel for a better partitioning with less reductions
   int parallel = 1;
   if (prob_m > 16 * thread_m_blocks) {
     parallel = prob_m / (16 * thread_m_blocks);
@@ -233,13 +235,13 @@ __global__ void Marlin(
   int slice_count = 0; // total number of active threadblocks in the current slice
   int slice_idx; // index of threadblock in current slice; numbered bottom to top
 
+  // We can easily implement parallel problem execution by just remapping indices and advancing global pointers
   if (slice_col_par >= n_tiles) {
     A += (slice_col_par / n_tiles) * 16 * thread_m_blocks * prob_k / 8;
     C += (slice_col_par / n_tiles) * 16 * thread_m_blocks * prob_n / 8;
     locks += (slice_col_par / n_tiles) * n_tiles;
     slice_col = slice_col_par % n_tiles;
   }
-
 
   // Compute all information about the current slice which is required for synchronization.
   auto init_slice = [&] () {
@@ -685,6 +687,11 @@ __global__ void Marlin(
         #pragma unroll
         for (int i = 0; i < b_sh_wr_iters; i++)
           B_ptr[i] += b_sh_stride - b_gl_rd_delta_o * k_tiles;
+        if (slice_col == 0) {
+          #pragma unroll
+          for (int i = 0; i < b_sh_wr_iters; i++)
+            B_ptr[i] -= b_gl_stride;
+        }
         s_gl_rd = s_sh_stride * slice_col + threadIdx.x;
         start_pipes();
       }
@@ -736,7 +743,7 @@ int marlin_cuda(
   int thread_k = -1,
   int thread_n = -1,
   int sms = -1,
-  int max_par = 8
+  int max_par = 16
 ) {
   int tot_m = prob_m;
   int tot_m_blocks = ceildiv(tot_m, 16);
