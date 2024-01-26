@@ -42,7 +42,7 @@ def benchmark_dense(A, B, C):
     }
 
 def benchmark_quant(A, B, C, s, thread_k, thread_n, sms):
-    workspace = torch.zeros(256, device=torch.device('cuda:0'))
+    workspace = torch.zeros(C.shape[1] // 128 * 8, device=torch.device('cuda:0'))
     res = benchmark(lambda: marlin.mul(A, B, C, s, workspace, thread_k, thread_n, sms))
     return {
         's': res,
