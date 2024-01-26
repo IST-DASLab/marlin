@@ -22,6 +22,7 @@
 #include <cuda.h>
 #include <cuda_fp16.h>
 #include <cuda_runtime.h>
+#include <iostream>
 
 
 constexpr int ceildiv(int a, int b) {
@@ -211,25 +212,41 @@ __global__ void Marlin(
   // While this kind of partitioning makes things somewhat more complicated, it ensures good utilization of all SMs
   // for many kinds of shape and GPU configurations, while requiring as few slow global cross-threadblock reductions as 
   // possible.
+  
+  // For larger GEMMs we run multiple batchsize 64 versions in parallel for a better partitioning with less reductions
+  int parallel = 1;
+  if (prob_m > 16 * thread_m_blocks) {
+    parallel = prob_m / (16 * thread_m_blocks);
+    prob_m = 16 * thread_m_blocks;
+  }
 
   int k_tiles = prob_k / 16 / thread_k_blocks;
   int n_tiles = prob_n / 16 / thread_n_blocks;
-  int iters = ceildiv(k_tiles * n_tiles, gridDim.x);
+  int iters = ceildiv(k_tiles * n_tiles * parallel, gridDim.x);
   // Ensure that the number of tiles in each stripe is a multiple of the groupsize; this avoids an annoying special case
   // where a stripe starts in the middle of group.
   if (group_blocks != -1)
     iters = (group_blocks / thread_k_blocks) * ceildiv(iters, (group_blocks / thread_k_blocks));
 
   int slice_row = (iters * blockIdx.x) % k_tiles;
-  int slice_col = (iters * blockIdx.x) / k_tiles;
+  int slice_col_par = (iters * blockIdx.x) / k_tiles;
+  int slice_col = slice_col_par;
   int slice_iters; // number of threadblock tiles in the current slice
   int slice_count = 0; // total number of active threadblocks in the current slice
   int slice_idx; // index of threadblock in current slice; numbered bottom to top
 
+  // We can easily implement parallel problem execution by just remapping indices and advancing global pointers
+  if (slice_col_par >= n_tiles) {
+    A += (slice_col_par / n_tiles) * 16 * thread_m_blocks * prob_k / 8;
+    C += (slice_col_par / n_tiles) * 16 * thread_m_blocks * prob_n / 8;
+    locks += (slice_col_par / n_tiles) * n_tiles;
+    slice_col = slice_col_par % n_tiles;
+  }
+
   // Compute all information about the current slice which is required for synchronization.
   auto init_slice = [&] () {
-    slice_iters = iters * (blockIdx.x + 1) - (k_tiles * slice_col + slice_row);
-    if (slice_iters < 0 || slice_col >= n_tiles)
+    slice_iters = iters * (blockIdx.x + 1) - (k_tiles * slice_col_par + slice_row);
+    if (slice_iters < 0 || slice_col_par >= n_tiles * parallel)
       slice_iters = 0;
     if (slice_iters == 0)
       return;
@@ -237,9 +254,9 @@ __global__ void Marlin(
       slice_iters = k_tiles - slice_row;
     slice_count = 1;
     slice_idx = 0;
-    int col_first = iters * ceildiv(k_tiles * slice_col, iters);
-    if (col_first <= k_tiles * (slice_col + 1)) {
-      int col_off = col_first - k_tiles * slice_col;
+    int col_first = iters * ceildiv(k_tiles * slice_col_par, iters);
+    if (col_first <= k_tiles * (slice_col_par + 1)) {
+      int col_off = col_first - k_tiles * slice_col_par;
       slice_count = ceildiv(k_tiles - col_off, iters);
       if (col_off > 0)
         slice_count++;
@@ -251,6 +268,12 @@ __global__ void Marlin(
         if (col_off > 0)
           slice_idx--;
       }
+    }
+    if (slice_col == n_tiles) {
+      A += 16 * thread_m_blocks * prob_k / 8;
+      C += 16 * thread_m_blocks * prob_n / 8;
+      locks += n_tiles;
+      slice_col = 0;
     }
   };
   init_slice();
@@ -656,6 +679,7 @@ __global__ void Marlin(
       if (last) // only the last block in a slice actually writes the result
         write_result();
       slice_row = 0;
+      slice_col_par++;
       slice_col++;
       init_slice();
       if (slice_iters) {
@@ -663,6 +687,11 @@ __global__ void Marlin(
         #pragma unroll
         for (int i = 0; i < b_sh_wr_iters; i++)
           B_ptr[i] += b_sh_stride - b_gl_rd_delta_o * k_tiles;
+        if (slice_col == 0) {
+          #pragma unroll
+          for (int i = 0; i < b_sh_wr_iters; i++)
+            B_ptr[i] -= b_gl_stride;
+        }
         s_gl_rd = s_sh_stride * slice_col + threadIdx.x;
         start_pipes();
       }
@@ -713,10 +742,12 @@ int marlin_cuda(
   cudaStream_t stream = 0,
   int thread_k = -1,
   int thread_n = -1,
-  int sms = -1
+  int sms = -1,
+  int max_par = 16
 ) {
   int tot_m = prob_m;
   int tot_m_blocks = ceildiv(tot_m, 16);
+  int pad = 16 * tot_m_blocks - tot_m;
 
   if (sms == -1)
     cudaDeviceGetAttribute(&sms, cudaDevAttrMultiProcessorCount, dev);
@@ -753,9 +784,15 @@ int marlin_cuda(
   for (int i = 0; i < tot_m_blocks; i += 4) {
     int thread_m_blocks = tot_m_blocks - i;
     prob_m = tot_m - 16 * i;
+    int par = 1;
     if (thread_m_blocks > 4) {
+      // Note that parallel > 1 currently only works for inputs without any padding
+      par = (16 * thread_m_blocks - pad) / 64;
+      if (par > max_par)
+        par = max_par;
+      prob_m = 64 * par;
+      i += 4 * (par - 1);
       thread_m_blocks = 4;
-      prob_m = 64;
     }
     
     // For compilation speed, we only define the kernel configurations that have seemed useful (in terms of performance)
@@ -774,8 +811,8 @@ int marlin_cuda(
     else
       ret = ERR_KERN_SHAPE;
 
-    A_ptr += 16 * thread_m_blocks * (prob_k / 8);
-    C_ptr += 16 * thread_m_blocks * (prob_n / 8);
+    A_ptr += 16 * thread_m_blocks * (prob_k / 8) * par;
+    C_ptr += 16 * thread_m_blocks * (prob_n / 8) * par;
   }
 
   return ret;
