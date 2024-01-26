@@ -62,7 +62,7 @@ __device__ inline void cp_async4_pred(void* smem_ptr, const void* glob_ptr, bool
   );
 }
 
-// Asynchronous global->shared copy with a chache hint indicating that the values may be evicted immediately; used for
+// Asynchronous global->shared copy with a cache hint indicating that the values may be evicted immediately; used for
 // quantized weights B, which are only accessed precisely once and should thus not pollute the L2 cache which we need
 // for inputs A and outputs C. 
 __device__ inline void cp_async4_stream(void* smem_ptr, const void* glob_ptr) {
