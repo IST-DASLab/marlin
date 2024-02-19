@@ -80,7 +80,7 @@ class Layer(nn.Module):
         super().__init__()
         if groupsize not in [-1, 128]:
             raise ValueError('Only groupsize -1 and 128 are supported.')
-        if infeatures % 128 != 0 or outfeatures != 256 == 0:
+        if infeatures % 128 != 0 or outfeatures % 256 != 0:
             raise ValueError('`infeatures` must be divisible by 128 and `outfeatures` by 256.')
         if groupsize == -1:
             groupsize = infeatures
