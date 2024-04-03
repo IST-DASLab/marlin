@@ -5,27 +5,33 @@
 import marlin
 
 # Save checkpoint name here since passing around extra args seems to confuse the eval harness
-MARLIN_CHECKPOINT = '' 
+MARLIN_CHECKPOINT = ""
+
 
 def get_llama_marlin(name, *args, **kwargs):
     import torch
+
     def skip(*args, **kwargs):
         pass
+
     torch.nn.init.kaiming_uniform_ = skip
     torch.nn.init.uniform_ = skip
     torch.nn.init.normal_ = skip
     from transformers import LlamaForCausalLM
-    model = LlamaForCausalLM.from_pretrained(name, torch_dtype='auto')
+
+    model = LlamaForCausalLM.from_pretrained(name, torch_dtype="auto")
     # Not really sure why this is sometimes > 1, but it messes up quantized inference ...
     # Fortunately, just setting it to 1 doesn't seem to affect standard inference
     model.config.pretraining_tp = 1
+
     def name_filter(n):
-        if 'q_proj' in n or 'k_proj' in n or 'v_proj' in n or 'o_proj' in n:
+        if "q_proj" in n or "k_proj" in n or "v_proj" in n or "o_proj" in n:
             return True
-        if 'mlp.gate_proj' in n or 'mlp.up_proj' in n or 'mlp.down_proj' in n:
+        if "mlp.gate_proj" in n or "mlp.up_proj" in n or "mlp.down_proj" in n:
             return True
         return False
-    groupsize = -1 if MARLIN_CHECKPOINT.endswith('marlin') else 128
+
+    groupsize = -1 if MARLIN_CHECKPOINT.endswith("marlin") else 128
     marlin.replace_linear(model, name_filter, groupsize=groupsize)
     model.load_state_dict(torch.load(MARLIN_CHECKPOINT))
     return model
@@ -116,8 +122,7 @@ def parse_eval_args() -> argparse.Namespace:
         type=float,
         default=None,
         metavar="N|0<N<1",
-        help="Limit the number of examples per task. "
-        "If <1, limit is a percentage of the total number of examples.",
+        help="Limit the number of examples per task. " "If <1, limit is a percentage of the total number of examples.",
     )
     parser.add_argument(
         "--use_cache",
@@ -163,10 +168,7 @@ def parse_eval_args() -> argparse.Namespace:
     parser.add_argument(
         "--gen_kwargs",
         default=None,
-        help=(
-            "String arguments for model generation on greedy_until tasks,"
-            " e.g. `temperature=0,top_k=0,top_p=0`."
-        ),
+        help=("String arguments for model generation on greedy_until tasks," " e.g. `temperature=0,top_k=0,top_p=0`."),
     )
     parser.add_argument(
         "--verbosity",
@@ -176,12 +178,7 @@ def parse_eval_args() -> argparse.Namespace:
         metavar="CRITICAL|ERROR|WARNING|INFO|DEBUG",
         help="Controls the reported logging error level. Set to DEBUG when testing + adding new task configurations for comprehensive log output.",
     )
-    parser.add_argument(
-        "--marlin_checkpoint",
-        type=str,
-        default="",
-        help="Marlin checkpoint to load."
-    )
+    parser.add_argument("--marlin_checkpoint", type=str, default="", help="Marlin checkpoint to load.")
     return parser.parse_args()
 
 
@@ -195,6 +192,7 @@ def cli_evaluate(args: Union[argparse.Namespace, None] = None) -> None:
         del args.marlin_checkpoint
         # Overwrite model load with marlin load
         import transformers
+
         transformers.AutoModelForCausalLM.from_pretrained = staticmethod(get_llama_marlin)
 
     eval_logger = utils.eval_logger
@@ -206,8 +204,7 @@ def cli_evaluate(args: Union[argparse.Namespace, None] = None) -> None:
 
     if args.limit:
         eval_logger.warning(
-            " --limit SHOULD ONLY BE USED FOR TESTING."
-            "REAL METRICS SHOULD NOT BE COMPUTED USING LIMIT."
+            " --limit SHOULD ONLY BE USED FOR TESTING." "REAL METRICS SHOULD NOT BE COMPUTED USING LIMIT."
         )
     if args.include_path is not None:
         eval_logger.info(f"Including path: {args.include_path}")
@@ -216,9 +213,7 @@ def cli_evaluate(args: Union[argparse.Namespace, None] = None) -> None:
     if args.tasks is None:
         task_names = ALL_TASKS
     elif args.tasks == "list":
-        eval_logger.info(
-            "Available Tasks:\n - {}".format("\n - ".join(sorted(ALL_TASKS)))
-        )
+        eval_logger.info("Available Tasks:\n - {}".format("\n - ".join(sorted(ALL_TASKS))))
         sys.exit()
     else:
         if os.path.isdir(args.tasks):
@@ -237,9 +232,7 @@ def cli_evaluate(args: Union[argparse.Namespace, None] = None) -> None:
                     config = utils.load_yaml_config(task)
                     task_names.append(config)
             task_missing = [
-                task
-                for task in tasks_list
-                if task not in task_names and "*" not in task
+                task for task in tasks_list if task not in task_names and "*" not in task
             ]  # we don't want errors if a wildcard ("*") task name was used
 
             if task_missing:
@@ -256,9 +249,7 @@ def cli_evaluate(args: Union[argparse.Namespace, None] = None) -> None:
         path = Path(args.output_path)
         # check if file or 'dir/results.json' exists
         if path.is_file() or Path(args.output_path).joinpath("results.json").is_file():
-            eval_logger.warning(
-                f"File already exists at {path}. Results will be overwritten."
-            )
+            eval_logger.warning(f"File already exists at {path}. Results will be overwritten.")
             output_path_file = path.joinpath("results.json")
             assert not path.is_file(), "File already exists"
         # if path json then get parent dir
@@ -294,9 +285,7 @@ def cli_evaluate(args: Union[argparse.Namespace, None] = None) -> None:
     if results is not None:
         if args.log_samples:
             samples = results.pop("samples")
-        dumped = json.dumps(
-            results, indent=2, default=_handle_non_serializable, ensure_ascii=False
-        )
+        dumped = json.dumps(results, indent=2, default=_handle_non_serializable, ensure_ascii=False)
         if args.show_config:
             print(dumped)
 
@@ -307,9 +296,7 @@ def cli_evaluate(args: Union[argparse.Namespace, None] = None) -> None:
 
             if args.log_samples:
                 for task_name, config in results["configs"].items():
-                    output_name = "{}_{}".format(
-                        re.sub("/|=", "__", args.model_args), task_name
-                    )
+                    output_name = "{}_{}".format(re.sub("/|=", "__", args.model_args), task_name)
                     filename = path.joinpath(f"{output_name}.jsonl")
                     samples_dumped = json.dumps(
                         samples[task_name],
@@ -329,4 +316,3 @@ def cli_evaluate(args: Union[argparse.Namespace, None] = None) -> None:
 
 
 cli_evaluate()
-

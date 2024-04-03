@@ -1,3 +1,5 @@
+import os
+
 import numpy as np
 import torch
 
@@ -9,15 +11,18 @@ def set_seed(seed):
 
 def get_wikitext2(nsamples, seed, seqlen, model):
     from datasets import load_dataset
-    traindata = load_dataset('wikitext', 'wikitext-2-raw-v1', split='train')
-    testdata = load_dataset('wikitext', 'wikitext-2-raw-v1', split='test')
 
-    from transformers import AutoTokenizer 
+    traindata = load_dataset("wikitext", "wikitext-2-raw-v1", split="train")
+    testdata = load_dataset("wikitext", "wikitext-2-raw-v1", split="test")
+
+    from transformers import AutoTokenizer
+
     tokenizer = AutoTokenizer.from_pretrained(model, use_fast=False)
-    trainenc = tokenizer("\n\n".join(traindata['text']), return_tensors='pt')
-    testenc = tokenizer("\n\n".join(testdata['text']), return_tensors='pt')
+    trainenc = tokenizer("\n\n".join(traindata["text"]), return_tensors="pt")
+    testenc = tokenizer("\n\n".join(testdata["text"]), return_tensors="pt")
 
     import random
+
     random.seed(seed)
     trainloader = []
     for _ in range(nsamples):
@@ -29,24 +34,26 @@ def get_wikitext2(nsamples, seed, seqlen, model):
         trainloader.append((inp, tar))
     testloader = []
     for i in range(0, testenc.input_ids.shape[1] - seqlen, seqlen):
-        testloader.append(testenc.input_ids[:, i:(i + seqlen)])
+        testloader.append(testenc.input_ids[:, i : (i + seqlen)])
 
-    return trainloader, testloader 
+    return trainloader, testloader
+
 
 def get_red(nsamples, seed, seqlen, model):
     VALSAMPLES = 1024
 
     from datasets import load_dataset
-    from transformers import AutoTokenizer 
-    tokenizer = AutoTokenizer.from_pretrained(model, use_fast=False)
-    traindata = load_dataset('togethercomputer/RedPajama-Data-1T-Sample', split='train')
+    from transformers import AutoTokenizer
 
-    np.random.seed(0)
+    tokenizer = AutoTokenizer.from_pretrained(model, use_fast=False)
+    traindata = load_dataset("togethercomputer/RedPajama-Data-1T-Sample", split="train")
+
+    np.random.seed(seed)
     perm = np.random.permutation(len(traindata))
 
     dataloader = []
     for i in perm:
-        tokens = tokenizer(traindata[int(i)]['text'], return_tensors='pt').input_ids
+        tokens = tokenizer(traindata[int(i)]["text"], return_tensors="pt").input_ids
         if not (1 < tokens.shape[1] <= seqlen):
             continue
         dataloader.append(tokens)
@@ -57,12 +64,13 @@ def get_red(nsamples, seed, seqlen, model):
     return trainloader, testloader
 
 
-def get_loaders(
-    name, nsamples=256, seed=0, seqlen=2048, model=''
-):
-    if 'wikitext2' in name:
+def get_loaders(name, nsamples=256, seed=0, seqlen=2048, model=""):
+    if os.path.isfile(name):
+        samples = torch.load(name)[:nsamples]
+        assert isinstance(samples, list)
+        assert isinstance(samples[0], torch.Tensor)
+        return [sample[..., :seqlen] for sample in samples], None
+    if "wikitext2" in name:
         return get_wikitext2(nsamples, seed, seqlen, model)
-        return data, None
-    if 'red' in name:
+    if "red" in name:
         return get_red(nsamples, seed, seqlen, model)
-
