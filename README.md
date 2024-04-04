@@ -65,6 +65,10 @@ effect on Marlin's virtually optimal performance (relative to the lower clock se
 * NVIDIA GPU with compute capability >= 8.0 (Ampere or Ada, Marlin is not yet optimized for Hopper)
 * `torch>=2.0.0`
 * `numpy`
+For running quantization script one also needs:
+* `transformers`
+* `datasets`
+* `sentencepiece`
 
 ## Usage:
 
@@ -105,13 +109,14 @@ which we do in our A10 benchmarks.
 
 In the `gptq` subfolder, we also provide a slightly improved version of the [GPTQ](https://github.com/IST-DASLab/gptq) algorithm, with better group grid clipping and non-uniform calibration sample length, that can produce Marlin-compatible 4-bit versions of Llama2 models.
 Additionally, there is a script to evaluate such compressed models (using Marlin kernels) in the popular [LLM eval harness](https://github.com/EleutherAI/lm-evaluation-harness).
+The script below was tested with `lm-eval-harness==0.4.0` and may not work with newer or older versions. 
 Here are corresponding sample commands (`marlin`, `transformers` and `datasets` packages must be installed):
 
 ```
 % Compress Llama2 model and export model in Marlin format.
-python llama.py LLAMA2_CHECKPOINT --wbits 4 --save checkpoint.pt
+python llama2.py LLAMA2_CHECKPOINT --wbits 4 --save checkpoint.pt
 % Perform perplexity evaluation of uncompressed model.
-python llama.py LLAMA2_CHECKPOINT
+python llama2.py LLAMA2_CHECKPOINT
 % Evaluate compressed model (with Marlin kernels) in the eval harness.
 python eval.py --model hf --model_args pretrained=LLAMA2_CHECKPOINT --tasks mmlu \
   --marlin_checkpoint checkpoint.marlin.g128
