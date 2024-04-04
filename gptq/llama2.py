@@ -293,7 +293,7 @@ def llama_eval(model, dataloader, dev):
 
 def llama_pack(model):
     layers = find_layers(model, [QLinear])
-    marlin.replace_linear(model, lambda n: n in layers, groupsize=args.groupsize)
+    marlin.replace_linear(model, lambda n: n in layers, groupsize=args.groupsize, layers=(nn.Linear, QLinear))
     qlayers = find_layers(model, [marlin.Layer])
     print("Packing ...")
     for name in qlayers:
@@ -350,7 +350,7 @@ if __name__ == "__main__":
         "--eval_datasets", nargs="+", type=str, default=["wikitext2", "red"], help="Datasets for perplexity evaluation."
     )
     # finetuning params
-    parser.add_argument("--lr", type=float, default=1e-4, help="Finetuning learning rate.")
+    parser.add_argument("--lr", type=float, default=1e-5, help="Finetuning learning rate.")
     parser.add_argument("--batch_size", type=int, default=1, help="Finetuning batch size.")
     parser.add_argument(
         "--finetune_epochs", type=int, default=0, help="How many epochs to finetune the block after quantization."

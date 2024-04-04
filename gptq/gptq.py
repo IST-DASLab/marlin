@@ -118,4 +118,4 @@ class GPTQ:
         print(f"Time: {(time.perf_counter() - tick):.2f}")
         print(f"L2 Loss: {torch.sum(Losses).item():.2f}")
 
-        return qweight, scale, zero
+        return qweight, scale.to(dtype), zero.to(dtype)

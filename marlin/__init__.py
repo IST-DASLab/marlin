@@ -17,8 +17,8 @@ import numpy as np
 import torch
 import torch.nn as nn
 
-
 import marlin_cuda
+
 
 def mul(A, B, C, s, workspace, thread_k=-1, thread_n=-1, sms=-1, max_par=16):
     """Marlin FP16xINT4 multiply; can be used within `torch.compile`.
@@ -35,7 +35,8 @@ def mul(A, B, C, s, workspace, thread_k=-1, thread_n=-1, sms=-1, max_par=16):
     marlin_cuda.mul(A, B, C, s, workspace, thread_k, thread_n, sms, max_par)
 
 
-# Precompute permutations for Marlin weight and scale shuffling 
+# Precompute permutations for Marlin weight and scale shuffling
+
 
 def _get_perms():
     perm = []
@@ -43,12 +44,7 @@ def _get_perms():
         perm1 = []
         col = i // 4
         for block in [0, 1]:
-            for row in [
-                2 * (i % 4),
-                2 * (i % 4) + 1,
-                2 * (i % 4 + 4),
-                2 * (i % 4 + 4) + 1
-            ]:
+            for row in [2 * (i % 4), 2 * (i % 4) + 1, 2 * (i % 4 + 4), 2 * (i % 4 + 4) + 1]:
                 perm1.append(16 * row + col + 8 * block)
         for j in range(4):
             perm.extend([p + 256 * j for p in perm1])
@@ -65,6 +61,7 @@ def _get_perms():
         scale_perm_single.extend([2 * i + j for j in [0, 1, 8, 9, 16, 17, 24, 25]])
     return perm, scale_perm, scale_perm_single
 
+
 _perm, _scale_perm, _scale_perm_single = _get_perms()
 
 
@@ -79,20 +76,20 @@ class Layer(nn.Module):
         """
         super().__init__()
         if groupsize not in [-1, 128]:
-            raise ValueError('Only groupsize -1 and 128 are supported.')
+            raise ValueError("Only groupsize -1 and 128 are supported.")
         if infeatures % 128 != 0 or outfeatures % 256 != 0:
-            raise ValueError('`infeatures` must be divisible by 128 and `outfeatures` by 256.')
+            raise ValueError("`infeatures` must be divisible by 128 and `outfeatures` by 256.")
         if groupsize == -1:
             groupsize = infeatures
         if infeatures % groupsize != 0:
-            raise ValueError('`infeatures` must be divisible by `groupsize`.')
+            raise ValueError("`infeatures` must be divisible by `groupsize`.")
         self.k = infeatures
         self.n = outfeatures
         self.groupsize = groupsize
-        self.register_buffer('B', torch.empty((self.k // 16, self.n * 16 // 8), dtype=torch.int))
-        self.register_buffer('s', torch.empty((self.k // groupsize, self.n), dtype=torch.half))
+        self.register_buffer("B", torch.empty((self.k // 16, self.n * 16 // 8), dtype=torch.int))
+        self.register_buffer("s", torch.empty((self.k // groupsize, self.n), dtype=torch.half))
         # 128 is currently the minimum `tile_n`, hence it gives the maximum workspace size; 16 is the default `max_par`
-        self.register_buffer('workspace', torch.zeros(self.n // 128 * 16, dtype=torch.int), persistent=False)
+        self.register_buffer("workspace", torch.zeros(self.n // 128 * 16, dtype=torch.int), persistent=False)
 
     def forward(self, A):
         C = torch.empty(A.shape[:-1] + (self.s.shape[1],), dtype=A.dtype, device=A.device)
@@ -101,16 +98,16 @@ class Layer(nn.Module):
 
     def pack(self, linear):
         """Pack a fake-quantized linear layer into this actual Marlin representation.
-        @linear: fake-quantized `torch.nn.Linear` layer to convert (must be of type `torch.half`)
+        @linear: quantized QLinear layer to convert (must be of type `torch.half`)
         @scales: corresponding quantization scales of shape `(infeatures, groups)`
-        """ 
+        """
         weight = linear.get_weight()
-        scales = linear.scales.unsqueeze(-1)
+        scales = linear.scale.squeeze(-1)
 
         if weight.dtype != torch.half:
-            raise ValueError('Only `torch.half` weights are supported.')
+            raise ValueError("Only `torch.half` weights are supported.")
         tile = 16
-        maxq = 2 ** 4 - 1
+        maxq = 2**4 - 1
         s = scales.t()
         w = weight.data.t()
         if self.groupsize != self.k:
@@ -143,21 +140,22 @@ class Layer(nn.Module):
         self.s[:, :] = s.to(self.s.device)
 
 
-def replace_linear(module, name_filter=lambda n: True, groupsize=-1, name=''):
-    """Recursively replace all `torch.nn.Linear` layers by empty Marlin layers.
-    @module: top-level module in which to perform the replacement 
+def replace_linear(module, name_filter=lambda n: True, groupsize=-1, name="", layers=(nn.Linear,)):
+    """Recursively replace all specified layers by empty Marlin layers.
+    @module: top-level module in which to perform the replacement
     @name_filter: lambda indicating if a layer should be replaced
     @groupsize: marlin groupsize
     @name: root-level name
+    @layers: classes of layers to be replaced
     """
     if isinstance(module, Layer):
         return
     for attr in dir(module):
         tmp = getattr(module, attr)
-        name1 = name + '.' + attr if name != '' else attr
-        if isinstance(tmp, nn.Linear) and name_filter(name1):
-            setattr(
-                module, attr, Layer(tmp.in_features, tmp.out_features, groupsize=groupsize)
-            )
+        name1 = name + "." + attr if name != "" else attr
+        if isinstance(tmp, layers) and name_filter(name1):
+            setattr(module, attr, Layer(tmp.in_features, tmp.out_features, groupsize=groupsize))
     for name1, child in module.named_children():
-        replace_linear(child, name_filter, groupsize=groupsize, name=name + '.' + name1 if name != '' else name1)
+        replace_linear(
+            child, name_filter, groupsize=groupsize, name=name + "." + name1 if name != "" else name1, layers=layers
+        )

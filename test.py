@@ -11,12 +11,12 @@ seed = 0
 np.random.seed(seed)
 torch.random.manual_seed(seed)
 
-DEV = torch.device('cuda:0')
+DEV = torch.device("cuda:0")
 
 
 def gen_quant4(m, n, groupsize=-1):
     tile = 16
-    maxq = 2 ** 4 - 1
+    maxq = 2**4 - 1
     w = torch.randn((m, n), dtype=torch.half, device=DEV)
     if groupsize != -1:
         w = w.reshape((-1, groupsize, n))
@@ -29,11 +29,13 @@ def gen_quant4(m, n, groupsize=-1):
     w = torch.clamp(w, 0, maxq)
     ref = (w - (maxq + 1) // 2).half() * s
     if groupsize != -1:
+
         def reshape(w):
             w = w.reshape((groupsize, -1, n))
             w = w.permute(1, 0, 2)
             w = w.reshape((m, n)).contiguous()
             return w
+
         ref = reshape(ref)
         w = reshape(w)
     s = s.reshape((-1, n)).contiguous()
@@ -53,10 +55,11 @@ def gen_quant4(m, n, groupsize=-1):
     s = layer.s
     return ref, q, s
 
+
 class Test(unittest.TestCase):
 
     def run_problem(self, m, n, k, thread_k, thread_n, groupsize=-1):
-        print('% 5d % 6d % 6d % 4d % 4d % 4d' % (m, n, k, thread_k, thread_n, groupsize))
+        print("% 5d % 6d % 6d % 4d % 4d % 4d" % (m, n, k, thread_k, thread_n, groupsize))
         A = torch.randn((m, k), dtype=torch.half, device=DEV)
         B_ref, B, s = gen_quant4(k, n, groupsize=groupsize)
         C = torch.zeros((m, n), dtype=torch.half, device=DEV)
@@ -88,30 +91,10 @@ class Test(unittest.TestCase):
         print()
         return
         MODELS = {
-            ' 7B': [
-                (4096, 3 * 4096),
-                (4096, 4096),
-                (4096, 2 * 10752),
-                (10752, 4096)
-            ],
-            '13B': [
-                (5120, 3 * 5120),
-                (5120, 5120),
-                (5120, 2 * 13568),
-                (13568, 5120)
-            ],
-            '33B': [
-                (6656, 3 * 6656),
-                (6656, 6656),
-                (6656, 2 * 17664),
-                (17664, 6656)
-            ],
-            '70B': [
-                (8192, 3 * 8192),
-                (8192, 8192),
-                (8192, 2 * 21760),
-                (21760, 8192)
-            ]
+            " 7B": [(4096, 3 * 4096), (4096, 4096), (4096, 2 * 10752), (10752, 4096)],
+            "13B": [(5120, 3 * 5120), (5120, 5120), (5120, 2 * 13568), (13568, 5120)],
+            "33B": [(6656, 3 * 6656), (6656, 6656), (6656, 2 * 17664), (17664, 6656)],
+            "70B": [(8192, 3 * 8192), (8192, 8192), (8192, 2 * 21760), (21760, 8192)],
         }
         for _, layers in MODELS.items():
             for layer in layers:
@@ -130,20 +113,20 @@ class Test(unittest.TestCase):
         try:
             marlin.mul(A, B, C, s, workspace, 128, 128, -1)
         except:
-            err = True 
+            err = True
         self.assertTrue(err)
         err = False
         try:
             marlin.mul(A, B, C, s, workspace, 256, 256, -1)
         except:
-            err = True 
+            err = True
         self.assertTrue(err)
         s = torch.zeros((2, n), dtype=torch.half, device=DEV)
         err = False
         try:
             marlin.mul(A, B, C, s, workspace, 256, 256, -1)
         except:
-            err = True 
+            err = True
         self.assertTrue(err)
 
     def test_groups(self):
@@ -155,5 +138,5 @@ class Test(unittest.TestCase):
                         self.run_problem(m, n, k, *thread_shape, groupsize)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     unittest.main()
