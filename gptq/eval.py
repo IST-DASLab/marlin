@@ -1,8 +1,24 @@
 # Copied from https://github.com/EleutherAI/lm-evaluation-harness/blob/main/lm_eval/__main__.py
 # with minor modifications for Marlin checkpoint loading as I didn't find an easy way to call `lm_eval.cli_evaluate(...)` directly
 
+import argparse
+import json
+import logging
+import os
+import re
+import sys
+from pathlib import Path
+from typing import Union
+from functools import partial
+
+import numpy as np
 
 import marlin
+
+from lm_eval import evaluator, utils
+from lm_eval.api.registry import ALL_TASKS
+from lm_eval.tasks import include_path, initialize_tasks
+from lm_eval.utils import make_table
 
 # Save checkpoint name here since passing around extra args seems to confuse the eval harness
 MARLIN_CHECKPOINT = ""
@@ -24,34 +40,22 @@ def get_llama_marlin(name, *args, **kwargs):
     # Fortunately, just setting it to 1 doesn't seem to affect standard inference
     model.config.pretraining_tp = 1
 
+    skip_gq = "skip_gq" in MARLIN_CHECKPOINT
+    quantized_layers = []
+    if not skip_gq:
+        quantized_layers += ["k_proj", "v_proj"]
+    quantized_layers += ["q_proj", "o_proj", "up_proj", "gate_proj", "down_proj"]
+
     def name_filter(n):
-        if "q_proj" in n or "k_proj" in n or "v_proj" in n or "o_proj" in n:
-            return True
-        if "mlp.gate_proj" in n or "mlp.up_proj" in n or "mlp.down_proj" in n:
-            return True
+        for quantized_layer in quantized_layers:
+            if quantized_layer in n:
+                return True
         return False
 
     groupsize = -1 if MARLIN_CHECKPOINT.endswith("marlin") else 128
     marlin.replace_linear(model, name_filter, groupsize=groupsize)
     model.load_state_dict(torch.load(MARLIN_CHECKPOINT))
     return model
-
-
-import argparse
-import json
-import logging
-import os
-import re
-import sys
-from pathlib import Path
-from typing import Union
-
-import numpy as np
-
-from lm_eval import evaluator, utils
-from lm_eval.api.registry import ALL_TASKS
-from lm_eval.tasks import include_path, initialize_tasks
-from lm_eval.utils import make_table
 
 
 def _handle_non_serializable(o):

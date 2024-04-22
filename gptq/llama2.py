@@ -1,6 +1,6 @@
 import time
 from argparse import Namespace
-from typing import List, Sequence
+from typing import List, Sequence, Optional
 
 import torch
 import torch.nn as nn
@@ -29,7 +29,7 @@ def maybe_0th_element(x):
     return x
 
 
-def get_llama(name):
+def get_llama(name: str, model_seqlen: Optional[int] = None):
     import torch
 
     def skip(*args, **kwargs):
@@ -40,9 +40,9 @@ def get_llama(name):
     torch.nn.init.normal_ = skip
     from transformers import LlamaForCausalLM
 
-    model = LlamaForCausalLM.from_pretrained(name, torch_dtype="auto")
+    model = LlamaForCausalLM.from_pretrained(name, torch_dtype=torch.float16)
     model.config.pretraining_tp = 1
-    model.seqlen = 4096
+    model.seqlen = model_seqlen or model.config.max_position_embeddings
     return model
 
 
@@ -83,7 +83,12 @@ def finetune_block(
         epoch_loss = 0
         for step in range(steps_per_epoch):
             inps_, attention_mask_, position_ids_, targets_ = next(batch_iterator)
-            inps_, targets_, attention_mask_ = inps_.float(), targets_.float(), attention_mask_.float()
+            inps_, targets_, attention_mask_, position_ids_ = (
+                inps_.to(DEV, torch.float32),
+                targets_.to(DEV, torch.float32),
+                attention_mask_.to(DEV, torch.float32),
+                position_ids_.to(DEV),
+            )
             with torch.autocast(device_type="cuda", enabled=args.amp):
                 out = maybe_0th_element(layer(inps_, attention_mask=attention_mask_, position_ids=position_ids_))
             loss = F.mse_loss(out, targets_)
@@ -107,11 +112,12 @@ def llama_sequential(model, dataloader, dev, args):
     model.config.use_cache = False
     layers = model.model.layers
 
+    offload_device = "cpu" if args.offload else None
+
     model.model.embed_tokens = model.model.embed_tokens.to(dev)
     model.model.norm = model.model.norm.to(dev)
     layers[0] = layers[0].to(dev)
 
-    dtype = next(iter(model.parameters())).dtype
     inps = []
     attention_masks = []
     position_ids = []
@@ -122,9 +128,9 @@ def llama_sequential(model, dataloader, dev, args):
             self.module = module
 
         def forward(self, inp, **kwargs):
-            inps.append(inp)
-            attention_masks.append(kwargs["attention_mask"])
-            position_ids.append(kwargs["position_ids"])
+            inps.append(inp.to(offload_device))
+            attention_masks.append(kwargs["attention_mask"].to(offload_device))
+            position_ids.append(kwargs["position_ids"].to(offload_device))
             raise ValueError
 
     layers[0] = Catcher(layers[0])
@@ -182,9 +188,13 @@ def llama_sequential(model, dataloader, dev, args):
             for name in subset:
                 handles.append(subset[name].register_forward_hook(add_batch(name)))
             for j in range(args.nsamples):
-                out = maybe_0th_element(layer(inps[j], attention_mask=attention_masks[j], position_ids=position_ids[j]))
+                out = maybe_0th_element(
+                    layer(
+                        inps[j].to(dev), attention_mask=attention_masks[j].to(dev), position_ids=position_ids[j].to(dev)
+                    )
+                )
                 if args.finetune_epochs:
-                    outs.append(out)
+                    outs.append(out.to(offload_device))
             for h in handles:
                 h.remove()
 
@@ -209,7 +219,9 @@ def llama_sequential(model, dataloader, dev, args):
                 torch.cuda.empty_cache()
 
         for j in range(args.nsamples):
-            inps[j] = layer(inps[j], attention_mask=attention_masks[j], position_ids=position_ids[j])[0]
+            inps[j] = layer(
+                inps[j].to(dev), attention_mask=attention_masks[j].to(dev), position_ids=position_ids[j].to(dev)
+            )[0].to(offload_device)
 
         layers[i] = layer.cpu()
         del layer
@@ -317,6 +329,7 @@ if __name__ == "__main__":
     parser.add_argument("--dataset", type=str, default="red", help="Where to extract calibration data from.")
     parser.add_argument("--seed", type=int, default=0, help="Seed for sampling the calibration data.")
     parser.add_argument("--nsamples", type=int, default=256, help="Number of calibration data samples.")
+    parser.add_argument("--model_seqlen", type=int, default=None, help="Model sequence length.")
     parser.add_argument(
         "--percdamp", type=float, default=0.1, help="Percent of the average Hessian diagonal to use for dampening."
     )
@@ -344,6 +357,7 @@ if __name__ == "__main__":
         action="store_true",
         help="Whether to skip quantizing group keys and values for the 70B model with group-query attention.",
     )
+    parser.add_argument("--offload", action="store_true", help="Whether to offload intermediate activations.")
     parser.add_argument("--save", type=str, default="", help="Whether and where to save the quantized model.")
     # evaluation params
     parser.add_argument(
@@ -362,7 +376,7 @@ if __name__ == "__main__":
     if args.nearest:
         args.nsamples = 0
 
-    model = get_llama(args.model)
+    model = get_llama(args.model, args.model_seqlen)
     model.eval()
 
     dataloader, testloader = get_loaders(
@@ -381,6 +395,8 @@ if __name__ == "__main__":
 
     if args.save:
         args.save += ".marlin"
+        if args.skip_gq:
+            args.save += ".skip_gq"
         if args.groupsize != -1:
             args.save += ".g%d" % args.groupsize
         llama_pack(model)
