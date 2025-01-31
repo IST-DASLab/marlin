@@ -527,18 +527,14 @@ __global__ void Marlin(
       int row = (threadIdx.x % 32) / 4;
 
       if (!first) {
-        // Interestingly, doing direct global accesses here really seems to mess up the compiler and lead to slowdowns,
-        // hence we also use async-copies even though these fetches are not actually asynchronous.
         #pragma unroll
         for (int i = 0; i < thread_m_blocks * 4; i++) {
-          cp_async4_pred(
-            &sh[c_sh_wr + c_sh_wr_delta * i],
-            &C[c_gl_wr + c_gl_wr_delta_o * (i / 2) + c_gl_wr_delta_i * (i % 2)],
-            i < (thread_m_blocks - 1) * 4 || 8 * (i / 2) + row < prob_m
-          );
+          if (i < (thread_m_blocks - 1) * 4 || 8 * (i / 2) + row < prob_m) {
+            int4 c_val = C[c_gl_wr + c_gl_wr_delta_o * (i / 2) + c_gl_wr_delta_i * (i % 2)];
+            sh[c_sh_wr + c_sh_wr_delta * i] = c_val;
+          }
         }
-        cp_async_fence();
-        cp_async_wait<0>();
+        __syncthreads();
       }
 
       #pragma unroll
